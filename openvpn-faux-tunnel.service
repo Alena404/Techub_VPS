@@ -1,0 +1,33 @@
+[Unit]
+Description=OpenVPN Faux Tunnel Service
+After=network-online.target
+Wants=network-online.target
+Documentation=https://openvpn.net/
+
+[Service]
+Type=notify
+WorkingDirectory=/etc/openvpn
+ExecStart=/usr/sbin/openvpn --config /etc/openvpn/server.conf
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=30
+User=root
+Group=root
+LimitNOFILE=1024
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/openvpn /var/log
+
+# Security
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+Alias=openvpn-faux-tunnel.service
