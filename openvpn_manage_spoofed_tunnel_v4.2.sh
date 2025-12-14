@@ -1,5 +1,5 @@
 #!/bin/bash
-# Techub OpenVPN Management System v4.1
+# Techub OpenVPN Management System v4.2
 # Advanced Penetration Testing Toolkit for Educational Simulations
 # Comprehensive Faux Tunneling with MTN Cameroon Bypass Implementation
 
@@ -20,6 +20,10 @@ SYSTEMD_SERVICE="/etc/systemd/system/openvpn-faux-tunnel.service"
 SSH_TUNNEL_SERVICE="/etc/systemd/system/techub-ssh-tunnel.service"
 LOG_FILE="/var/log/techub.log"
 
+# Get server IP addresses
+PRIMARY_IP=$(hostname -I | awk '{print $1}')
+PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo "$PRIMARY_IP")
+
 # Ensure we're running as root
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}This script must be run as root${NC}" 
@@ -38,7 +42,7 @@ log() {
 show_header() {
     clear
     echo -e "${CYAN}==============================================${NC}"
-    echo -e "${CYAN}    Techub OpenVPN Management System v4.1     ${NC}"
+    echo -e "${CYAN}    Techub OpenVPN Management System v4.2     ${NC}"
     echo -e "${CYAN}         Advanced Faux Tunneling              ${NC}"
     echo -e "${CYAN}==============================================${NC}"
     echo ""
@@ -83,7 +87,7 @@ install_openvpn() {
     apt-get update
     
     # Install OpenVPN and dependencies
-    apt-get install -y openvpn easy-rsa iptables-persistent
+    apt-get install -y openvpn easy-rsa iptables-persistent curl dnsutils
     
     # Set up Easy-RSA
     make-cadir ~/openvpn-ca
@@ -267,6 +271,12 @@ show_status() {
         echo -e "NAT Rules: ${RED}Not Configured${NC}"
     fi
     
+    # Show IP addresses
+    echo ""
+    echo -e "Server IPs:"
+    echo -e "  Primary IP: ${GREEN}${PRIMARY_IP}${NC}"
+    echo -e "  Public IP:  ${GREEN}${PUBLIC_IP}${NC}"
+    
     echo ""
     read -p "Press Enter to continue..."
 }
@@ -305,7 +315,7 @@ load_balancing=true
 EOF
 }
 
-# Configure MTN Cameroon bypass systems (FIXED VERSION)
+# Configure MTN Cameroon bypass systems
 configure_mtn_bypass() {
     show_header
     echo -e "${GREEN}Configuring MTN Cameroon Bypass Systems${NC}"
@@ -494,7 +504,7 @@ EOF
     read -p "Press Enter to continue..."
 }
 
-# Install auto launch functionality (FIXED VERSION)
+# Install auto launch functionality
 install_auto_launch() {
     show_header
     echo -e "${GREEN}Installing Auto Launch System${NC}"
@@ -542,8 +552,8 @@ Wants=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/Techub_VPS
-ExecStart=/usr/bin/sudo /root/Techub_VPS/openvpn_manage_spoofed_tunnel_v4.0.sh service-mode
+WorkingDirectory=${SCRIPT_DIR}
+ExecStart=/usr/bin/sudo ${SCRIPT_PATH} service-mode
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -686,6 +696,36 @@ EOF
     read -p "Press Enter to continue..."
 }
 
+# Create SSH tunnel user
+create_ssh_tunnel_user() {
+    local username="$1"
+    local password="$2"
+    
+    # Create user with no shell for security
+    useradd -m -s /bin/false "$username" 2>/dev/null || {
+        echo -e "${YELLOW}User $username already exists${NC}"
+    }
+    
+    # Set password
+    echo "$username:$password" | chpasswd
+    
+    # Add to SSH configuration if not already present
+    if ! grep -q "Match User $username" /etc/ssh/sshd_config; then
+        cat >> /etc/ssh/sshd_config << EOF
+
+# SSH Tunneling Configuration for $username
+Match User $username
+    AllowTcpForwarding yes
+    X11Forwarding no
+    AllowAgentForwarding yes
+    ForceCommand /bin/false
+    PermitTTY no
+EOF
+    fi
+    
+    echo -e "${GREEN}SSH tunnel user $username created/updated successfully!${NC}"
+}
+
 # Configure SSH tunneling for MTN zero-rated domains
 configure_ssh_tunneling() {
     show_header
@@ -710,6 +750,8 @@ AllowAgentForwarding yes
 AllowStreamLocalForwarding yes
 X11Forwarding yes
 PermitTTY yes
+ClientAliveInterval 60
+ClientAliveCountMax 3
 EOF
     
     # Restart SSH service
@@ -723,6 +765,10 @@ EOF
         zero_rated_domains="mtn.cm,nointernet.mtn.cm,www.facebook.com,www.ayoba.me,mtnonline.com"
         zero_rated_domains_alt="mtn.cm,ayoba.me,nointernet.mtn.cm,m.facebook.com"
     fi
+    
+    # Create default SSH tunnel user
+    echo "Creating default SSH tunnel user..."
+    create_ssh_tunnel_user "tunneluser" "TunnelPass123!"
     
     # Create SSH tunnel management script
     cat > /usr/local/bin/manage-ssh-tunnel << 'EOF'
@@ -739,21 +785,39 @@ else
     zero_rated_domains_alt="mtn.cm,ayoba.me,nointernet.mtn.cm,m.facebook.com"
 fi
 
-# Get server IP
-SERVER_IP=$(hostname -I | awk '{print $1}')
+# Get server IP addresses
+PRIMARY_IP=$(hostname -I | awk '{print $1}')
+PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo "$PRIMARY_IP")
+if [[ -z "$PUBLIC_IP" ]]; then
+    PUBLIC_IP=$(dig +short myip.opendns.com @resolver1.opendns.com 2>/dev/null || echo "$PRIMARY_IP")
+fi
+
+# Function to list tunnel users
+list_tunnel_users() {
+    echo "SSH tunnel users:"
+    grep -E "Match User" /etc/ssh/sshd_config | awk '{print "  - " $3}' | sort -u
+}
 
 case "$1" in
     start)
         echo "Starting SSH tunnel for MTN zero-rated domains..."
         echo "Connect from client using:"
-        echo "ssh -D 1080 -f -C -q -N user@$SERVER_IP"
+        echo "ssh -D 1080 -f -C -q -N user@$PUBLIC_IP"
         echo ""
         echo "Configure your browser to use SOCKS proxy:"
-        echo "Host: localhost  Port: 1080  Type: SOCKS5"
+        echo "Host: $PUBLIC_IP  Port: 1080  Type: SOCKS5"
         echo ""
         echo "Zero-rated domains that will work without data:"
-        echo "$zero_rated_domains"
-        echo "$zero_rated_domains_alt"
+        IFS=',' read -ra DOMAINS <<< "$zero_rated_domains"
+        for domain in "${DOMAINS[@]}"; do
+            echo "   - $domain"
+        done
+        IFS=',' read -ra ALT_DOMAINS <<< "$zero_rated_domains_alt"
+        for domain in "${ALT_DOMAINS[@]}"; do
+            echo "   - $domain"
+        done
+        echo ""
+        list_tunnel_users
         echo ""
         echo "SSH tunneling started successfully!"
         ;;
@@ -770,15 +834,59 @@ case "$1" in
         else
             echo "No SSH tunnels running"
         fi
+        echo ""
+        echo "Server IPs:"
+        echo "  Primary IP: $PRIMARY_IP"
+        echo "  Public IP:  $PUBLIC_IP"
+        echo ""
+        list_tunnel_users
+        ;;
+    create-user)
+        echo "=== Create SSH Tunnel User ==="
+        read -p "Enter username: " username
+        if [[ -n "$username" ]]; then
+            read -s -p "Enter password: " password
+            echo ""
+            if [[ -n "$password" ]]; then
+                # Create user
+                useradd -m -s /bin/false "$username" 2>/dev/null || {
+                    echo "User $username already exists"
+                }
+                echo "$username:$password" | chpasswd
+                
+                # Add to SSH configuration
+                if ! grep -q "Match User $username" /etc/ssh/sshd_config; then
+                    cat >> /etc/ssh/sshd_config << EOFF
+Match User $username
+    AllowTcpForwarding yes
+    X11Forwarding no
+    AllowAgentForwarding yes
+    ForceCommand /bin/false
+    PermitTTY no
+EOFF
+                fi
+                systemctl restart ssh
+                echo "User $username created and configured for SSH tunneling"
+                echo "Connection details:"
+                echo "  Server IP: $PUBLIC_IP"
+                echo "  Username: $username"
+                echo "  Port: 22 (default SSH)"
+                echo "  Connection command: ssh -D 1080 -f -C -q -N $username@$PUBLIC_IP"
+            else
+                echo "Password cannot be empty"
+            fi
+        else
+            echo "Username cannot be empty"
+        fi
         ;;
     setup-client)
         echo "=== SSH Tunnel Client Setup Instructions ==="
         echo ""
         echo "1. On your client device (phone/computer), run:"
-        echo "   ssh -D 1080 -f -C -q -N user@$SERVER_IP"
+        echo "   ssh -D 1080 -f -C -q -N tunneluser@$PUBLIC_IP"
         echo ""
         echo "2. Configure your browser to use SOCKS proxy:"
-        echo "   Host: localhost  Port: 1080  Type: SOCKS5"
+        echo "   Host: $PUBLIC_IP  Port: 1080  Type: SOCKS5"
         echo ""
         echo "3. Visit these MTN zero-rated domains without using data:"
         IFS=',' read -ra DOMAINS <<< "$zero_rated_domains"
@@ -791,15 +899,18 @@ case "$1" in
         done
         echo ""
         echo "4. For persistent connection, add to crontab:"
-        echo "   */5 * * * * pgrep -f 'ssh.*-D' >/dev/null || ssh -D 1080 -f -C -q -N user@$SERVER_IP"
+        echo "   */5 * * * * pgrep -f 'ssh.*-D' >/dev/null || ssh -D 1080 -f -C -q -N tunneluser@$PUBLIC_IP"
+        echo ""
+        list_tunnel_users
         ;;
     *)
-        echo "Usage: $0 {start|stop|status|setup-client}"
+        echo "Usage: $0 {start|stop|status|create-user|setup-client}"
         echo ""
         echo "Commands:"
         echo "  start          - Show connection instructions"
         echo "  stop           - Stop all SSH tunnels"
         echo "  status         - Check tunnel status"
+        echo "  create-user    - Create new SSH tunnel user"
         echo "  setup-client   - Show detailed client setup instructions"
         exit 1
         ;;
@@ -836,13 +947,14 @@ EOF
     echo "Features activated:"
     echo "1. SSH server configured for tunneling"
     echo "2. MTN zero-rated domain access through SSH"
-    echo "3. SOCKS proxy support"
+    echo "3. SOCKS proxy support (port 1080)"
     echo "4. Persistent tunnel service"
+    echo "5. Default user: tunneluser / TunnelPass123!"
     echo ""
     echo "Usage on client device:"
-    echo "ssh -D 1080 -f -C -q -N user@$(hostname -I | awk '{print $1}')"
+    echo "ssh -D 1080 -f -C -q -N tunneluser@$PUBLIC_IP"
     echo ""
-    echo "Configure browser to use SOCKS proxy at localhost:1080"
+    echo "Configure browser to use SOCKS proxy at $PUBLIC_IP:1080"
     echo "Then visit these zero-rated domains without using data:"
     IFS=',' read -ra DOMAINS <<< "$zero_rated_domains"
     for domain in "${DOMAINS[@]}"; do
@@ -854,7 +966,7 @@ EOF
     read -p "Press Enter to continue..."
 }
 
-# Service mode for persistent operation (ENHANCED VERSION)
+# Service mode for persistent operation
 service_mode() {
     log "INFO" "Starting Techub service mode"
     
@@ -889,6 +1001,7 @@ service_mode() {
     
     echo -e "${GREEN}Techub Service Mode Running${NC}"
     echo "Monitoring system health and maintaining connections..."
+    echo "Server IPs: $PRIMARY_IP / $PUBLIC_IP"
     echo "Press Ctrl+C to stop the service monitor"
     
     # Keep service alive with proper monitoring
